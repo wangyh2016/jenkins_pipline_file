@@ -1,0 +1,94 @@
+pipeline {
+    agent {
+        label 'dockernode-220'
+    }
+    
+    environment {
+        PASB_DIR = "${JENKINS_HOME}/template/trias_deploy_ubt/"
+        DAG_JAR = "${WORKSPACE}/streamNet-build/iri-1.5.5.jar"
+        SOR_BUILD="${JENKINS_HOME}/template/streamNet-build"
+    }
+    
+    stages {
+        stage('remove workspace octa web coding '){   //remove workspace
+            steps {
+               sh 'rm -rf dag_dev' 
+               sh 'rm -rf $DAG_JAR' 
+               sh 'cp -av $SOR_BUILD ${WORKSPACE}/ '
+               
+            }
+        }
+       
+        stage('get code octa-web-portal') {
+            steps {
+                dir("${JENKINS_HOME}/template/StreamNet") {
+                   sh 'git pull'
+               }
+                sh 'cp -av ${JENKINS_HOME}/template/StreamNet ${WORKSPACE}/dag_dev'
+//            checkout([                      // 获取git repo
+//                $class: 'GitSCM', 
+//                branches: [[name: '*/${BRANCH}']], 
+//                doGenerateSubmoduleConfigurations: false, 
+//                extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'dag_dev/'],[$class: 'CloneOption', timeout: 150],[$class: 'CheckoutOption', timeout: 160]], 
+//                submoduleCfg: [], 
+//                userRemoteConfigs: [[
+//                credentialsId: 'f84214cc-c319-4269-ba94-a0b1f6e55101', 
+//                url: 'https://github.com/triasteam/StreamNet.git'
+//            ]]
+//            ])
+            }
+        }
+    
+        stage('mvn jar'){  
+            steps {
+               dir("./dag_dev") {
+                   sh 'mvn clean'
+                   sh 'mvn package'
+                   sh 'cp target/iri-1.5.5.jar ../streamNet-build/'
+                   sh 'cp docker/entrypoint.sh ../streamNet-build/entrypoint.sh'
+                   sh 'chmod 775 ../streamNet-build/entrypoint.sh'                   
+               }
+            }
+        }
+   
+        stage('build'){   //builde bitcore-wallet-service
+            steps {
+                dir("./streamNet-build"){
+                   sh "docker build -t octahub.8lab.cn:5000/streamnet-server:$BUILD_NUMBER ."
+                }
+            }
+        }
+
+        stage('pull '){
+            steps{
+                sh "docker push octahub.8lab.cn:5000/streamnet-server:$BUILD_NUMBER"
+
+                sh "docker rmi -f octahub.8lab.cn:5000/streamnet-server:$BUILD_NUMBER"
+            }
+        }
+        stage('clear data'){
+            when {
+                allOf {
+                    environment name:'CLEARDATA',value:'yes'
+                }
+            }
+            steps {
+                dir("$PASB_DIR/"){
+                    sh "ansible 'oat-client' -m shell -a 'rm -rf /data/iri/data/*' "
+                }
+            }
+        }
+        stage('Deploy'){
+            steps{
+                //sh "cp -av hosts-${PSERVER} $PASB_DIR/hosts"
+                sh "cp -av $PASB_DIR/hosts-${PSERVER} $PASB_DIR/hosts"
+                sh "sed -i 's/<BUILD_TAG>/$BUILD_NUMBER/' $PASB_DIR/hosts"
+                //sh "sed -i 's/stream_tag=[0-9]*/stream_tag=$BUILD_NUMBER /'  $PASB_DIR/hosts"
+                dir("$PASB_DIR"){
+                   sh "ansible 'oat-client' -m command -a 'docker rm -f streamnet-svr'"
+                   sh "ansible-playbook -i hosts site.yml --limit oat-client --tag streamnet"
+                }
+            }
+        }
+    }
+} 
